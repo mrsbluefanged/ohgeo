@@ -1,65 +1,100 @@
-/* Oh Geo service worker
-   Offline-first: the whole game (flags included) lives in index.html,
-   so precaching a handful of files makes the app fully offline.
-   Bump CACHE_VERSION whenever you ship a new index.html. */
-
-const CACHE_VERSION = "ohgeo-v2";
-const PRECACHE = [
-  "./",
-  "./index.html",
-  "./manifest.webmanifest",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
-  "./icons/icon-maskable-192.png",
-  "./icons/icon-maskable-512.png",
-  "./icons/apple-touch-icon.png",
-  "./icons/favicon-32.png"
-];
+/* Oh Geo: load the latest game online and keep an offline copy. */
+const CACHE_VERSION = "ohgeo-v3-network-first";
+const INDEX_URL = new URL("./index.html", self.registration.scope).href;
 
 self.addEventListener("install", event => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION)
-      .then(cache => cache.addAll(PRECACHE))
-      .then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const response = await fetch(INDEX_URL, { cache: "no-store" });
+
+    if (
+      !response.ok ||
+      !response.headers.get("content-type")?.includes("text/html")
+    ) {
+      throw new Error(
+        "Game download failed; keeping the previous offline version"
+      );
+    }
+
+    const cache = await caches.open(CACHE_VERSION);
+    await cache.put(INDEX_URL, response);
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", event => {
-  event.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k))
-      ))
-      .then(() => self.clients.claim())
-  );
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+
+    await Promise.all(
+      keys
+        .filter(key =>
+          key.startsWith("ohgeo-") && key !== CACHE_VERSION
+        )
+        .map(key => caches.delete(key))
+    );
+
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener("fetch", event => {
-  const req = event.request;
-  if (req.method !== "GET") return;
+  const request = event.request;
+  if (request.method !== "GET") return;
 
-  const url = new URL(req.url);
+  const url = new URL(request.url);
+  const sameOrigin = url.origin === self.location.origin;
+  const isPage = sameOrigin && (
+    request.mode === "navigate" ||
+    url.href.split(/[?#]/)[0] === INDEX_URL
+  );
 
-  // Google Fonts: stale-while-revalidate so type works offline after first visit
-  if (url.hostname === "fonts.googleapis.com" || url.hostname === "fonts.gstatic.com") {
-    event.respondWith(
-      caches.open(CACHE_VERSION).then(cache =>
-        cache.match(req).then(cached => {
-          const fetched = fetch(req)
-            .then(res => { cache.put(req, res.clone()); return res; })
-            .catch(() => cached);
-          return cached || fetched;
-        })
-      )
-    );
+  if (isPage) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_VERSION);
+
+      try {
+        const response = await fetch(request, { cache: "no-store" });
+
+        if (
+          response.ok &&
+          response.headers.get("content-type")?.includes("text/html")
+        ) {
+          await cache.put(INDEX_URL, response.clone());
+          return response;
+        }
+
+        return (await cache.match(INDEX_URL)) || response;
+      } catch (error) {
+        const cached = await cache.match(INDEX_URL);
+        if (cached) return cached;
+        throw error;
+      }
+    })());
+
     return;
   }
 
-  // App shell: cache-first, fall back to network, fall back to cached index
-  event.respondWith(
-    caches.match(req).then(cached =>
-      cached ||
-      fetch(req).catch(() => caches.match("./index.html"))
-    )
-  );
+  const isFont =
+    url.hostname === "fonts.googleapis.com" ||
+    url.hostname === "fonts.gstatic.com";
+
+  if (!sameOrigin && !isFont) return;
+
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_VERSION);
+
+    try {
+      const response = await fetch(request);
+
+      if (response.ok || response.type === "opaque") {
+        await cache.put(request, response.clone());
+      }
+
+      return response;
+    } catch (error) {
+      const cached = await cache.match(request);
+      if (cached) return cached;
+      throw error;
+    }
+  })());
 });
