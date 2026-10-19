@@ -369,6 +369,29 @@ footer{margin-top:auto;padding-top:28px;text-align:center;color:var(--muted);fon
     <div class="card">
       <span class="eyebrow" id="setupModeLabel">Beat the Clock</span>
       <h2 id="setupTitle" style="margin:4px 0 18px">Set up your game</h2>
+      <div id="timedPlayersField">
+        <div class="field">
+          <span class="field-label" id="lblTimedPlayers">Number of players</span>
+          <div class="stepper" aria-labelledby="lblTimedPlayers">
+            <button class="iconbtn" id="timedPlayerMinus" aria-label="Remove a player" disabled>−</button>
+            <span class="count" id="timedPlayerCount" aria-live="polite">1</span>
+            <button class="iconbtn" id="timedPlayerPlus" aria-label="Add a player">+</button>
+          </div>
+          <span class="field-hint">With more than one player, take turns and compare scores. Rounds are per player.</span>
+        </div>
+        <div class="field">
+          <span class="field-label">Player names</span>
+          <div class="player-list" id="timedPlayerList"></div>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label" id="lblAnswerStyle">How do you want to answer?</span>
+        <div class="chips" role="group" aria-labelledby="lblAnswerStyle" id="answerStyleChips">
+          <button class="chip" data-style="choice" aria-pressed="true">Multiple choice</button>
+          <button class="chip" data-style="self" aria-pressed="false">No multiple choice</button>
+        </div>
+        <span class="field-hint">Without choices, say the country name and mark Got it or Missed it.</span>
+      </div>
 
       <div class="field">
         <span class="field-label" id="lblContent">What do you want to guess?</span>
@@ -425,12 +448,20 @@ footer{margin-top:auto;padding-top:28px;text-align:center;color:var(--muted);fon
     <div class="card">
       <span class="eyebrow" id="partyModeLabel">Shout-Out Party</span>
       <h2 id="partyTitle" style="margin:4px 0 18px">Who's playing?</h2>
+      <div class="field">
+        <span class="field-label" id="lblAnswerStyleP">How do you want to answer?</span>
+        <div class="chips" role="group" aria-labelledby="lblAnswerStyleP" id="answerStyleChipsP">
+          <button class="chip" data-style="choice" aria-pressed="true">Multiple choice</button>
+          <button class="chip" data-style="self" aria-pressed="false">No multiple choice</button>
+        </div>
+        <span class="field-hint">Without choices, say the country name and mark Got it or Missed it.</span>
+      </div>
 
       <div class="field">
         <span class="field-label" id="lblPlayers">Number of players</span>
         <div class="stepper" aria-labelledby="lblPlayers">
           <button class="iconbtn" id="playerMinus" aria-label="Remove a player">−</button>
-          <span class="count" id="playerCount" aria-live="polite">2</span>
+          <span class="count" id="playerCount" aria-live="polite">1</span>
           <button class="iconbtn" id="playerPlus" aria-label="Add a player">+</button>
         </div>
       </div>
@@ -508,6 +539,8 @@ footer{margin-top:auto;padding-top:28px;text-align:center;color:var(--muted);fon
       <span class="hud-pill" id="hudScorePill">⭐ <span class="big" id="hudScore">0</span></span>
     </div>
 
+    <div class="card hidden" id="partyLiveScores" aria-label="Player scores" aria-live="polite" style="margin-bottom:12px"></div>
+
     <div class="timer-wrap hidden" id="timerWrap">
       <div class="timer-track" role="presentation"><div class="timer-fill" id="timerFill"></div></div>
       <div class="timer-label" id="timerLabel" aria-hidden="true">15</div>
@@ -527,7 +560,8 @@ footer{margin-top:auto;padding-top:28px;text-align:center;color:var(--muted);fon
 
     <p class="feedback" id="feedback" aria-live="polite"></p>
 
-    <div class="options hidden" id="optionsGrid"></div>
+    <p class="field-hint" id="answerHint" style="text-align:center"></p>
+    <div class="options hidden" id="optionsGrid" role="group" aria-label="Mark your answer"></div>
 
     <div class="card hidden" id="f2fReveal">
       <p class="reveal-sub">The answer is…</p>
@@ -698,6 +732,7 @@ function discover(code) {
    STATE
    ============================================================ */
 const state = {
+  answerStyle: "choice",
   mode: "timed",          // timed | relaxed | f2f | turns
   content: "flag",        // flag | outline | mix
   level: "1",             // "1".."4" | "p" (progressive)
@@ -714,6 +749,8 @@ const state = {
   timerId: null,
   timeLeft: 0,
   answered: false,
+  winnerPending: false,
+  questionToken: 0,
   muted: false
 };
 
@@ -729,9 +766,11 @@ const shuffle = arr => {
   }
   return a;
 };
+const isTurnGame = () => state.mode === "turns" || ((state.mode === "timed" || state.mode === "relaxed") && state.players.length > 1);
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 const announce = msg => { $("srAnnounce").textContent = msg; };
 function showScreen(name) {
+  if (name !== "game") { stopTimer(); state.questionToken++; }
   document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
   $("screen-" + name).classList.add("active");
   window.scrollTo({ top: 0, behavior: "auto" });
@@ -819,8 +858,8 @@ function confetti(n = 26) {
    ============================================================ */
 function effectiveLevel() {
   if (state.level !== "p") return +state.level;
-  const perSeq = state.mode === "turns" ? state.rounds : state.totalQ;
-  const pos = state.mode === "turns" ? state.index % state.rounds : state.index;
+  const perSeq = isTurnGame() ? state.rounds : state.totalQ;
+  const pos = isTurnGame() ? state.index % state.rounds : state.index;
   return Math.min(4, Math.floor((pos / perSeq) * 4) + 1);
 }
 function applyMask(level) {
@@ -879,7 +918,7 @@ function updateTimerUI() {
    ============================================================ */
 function buildDeck() {
   const pool = state.content === "outline" ? OUTLINE_POOL : COUNTRIES;
-  state.totalQ = state.mode === "turns" ? state.rounds * state.players.length : state.rounds;
+  state.totalQ = isTurnGame() ? state.rounds * state.players.length : state.rounds;
   const picked = shuffle(pool).slice(0, Math.min(state.totalQ, pool.length));
   // if more questions than countries (tiny pools), repeat shuffled
   while (picked.length < state.totalQ) picked.push(...shuffle(pool).slice(0, state.totalQ - picked.length));
@@ -896,15 +935,15 @@ function buildDeck() {
 }
 
 function startGame() {
-  if (state.mode === "f2f" || state.mode === "turns")
+  if (state.mode === "f2f" || isTurnGame())
     state.players.forEach(p => { p.score = 0; p.correct = 0; p.time = 0; });
   buildDeck();
   const useTimer = state.mode !== "relaxed";
   $("timerWrap").classList.toggle("hidden", !useTimer);
-  $("hudStreakPill").classList.toggle("hidden", state.mode === "f2f" || state.mode === "turns");
+  $("hudStreakPill").classList.toggle("hidden", state.mode === "f2f" || isTurnGame());
   $("hudScorePill").classList.toggle("hidden", state.mode === "f2f");
-  $("hudTurnPill").classList.toggle("hidden", state.mode !== "turns");
-  if (state.mode === "turns") showPassScreen();
+  $("hudTurnPill").classList.toggle("hidden", !isTurnGame());
+  if (isTurnGame()) showPassScreen();
   else { showScreen("game"); loadQuestion(); }
 }
 
@@ -914,31 +953,42 @@ function currentPlayer() { return state.players[Math.floor(state.index / state.r
 function showPassScreen() {
   const p = currentPlayer();
   $("passName").textContent = p.name;
-  $("passDetail").textContent = `${state.rounds} question${state.rounds === 1 ? "" : "s"}. Fast + correct = glory.`;
+  $("passDetail").textContent = `${state.rounds} question${state.rounds === 1 ? "" : "s"}. ${state.mode === "relaxed" ? "Take your time — no timer!" : "Fast + correct = glory."}`;
   showScreen("pass");
   announce(`Pass the device to ${p.name}.`);
 }
 $("readyBtn").addEventListener("click", () => { soundTap(); showScreen("game"); loadQuestion(); });
 
 function loadQuestion() {
+  stopTimer();
+  const token = ++state.questionToken;
   state.answered = false;
+  state.winnerPending = false;
+  state.timeLeft = state.timerLen;
+  updateTimerUI();
+  renderLiveScores();
   const item = currentItem();
   const c = item.c;
 
   // HUD
-  $("hudRound").textContent = state.mode === "turns"
+  $("hudRound").textContent = isTurnGame()
     ? `${(state.index % state.rounds) + 1}/${state.rounds}`
     : `${state.index + 1}/${state.totalQ}`;
-  $("hudScore").textContent = state.mode === "turns" ? currentPlayer().score : state.score;
+  $("hudScore").textContent = isTurnGame() ? currentPlayer().score : state.score;
   $("hudStreak").textContent = state.streak;
-  if (state.mode === "turns") $("hudTurn").textContent = currentPlayer().name;
+  if (isTurnGame()) $("hudTurn").textContent = currentPlayer().name;
 
   // Reset panels
   $("feedback").textContent = "";
   $("feedback").className = "feedback";
   $("nextRow").classList.add("hidden");
   $("f2fReveal").classList.add("hidden");
-  $("optionsGrid").classList.toggle("hidden", state.mode === "f2f");
+  $("optionsGrid").classList.remove("hidden");
+  $("answerHint").textContent = state.answerStyle === "self"
+    ? (state.mode === "f2f" ? "Say the country name. Tap the player who got it, or Missed it." : "Say the country name, then choose Got it or Missed it.")
+    : "Choose the country name.";
+  buildOptions(c, item.kind);
+  $("optionsGrid").querySelectorAll("button").forEach(b => b.disabled = true);
 
   const img = $("flagImg"), svg = $("outlineSvg"), loading = $("flagLoading");
   loading.classList.add("hidden");
@@ -952,11 +1002,16 @@ function loadQuestion() {
     img.style.visibility = "hidden";
     img.alt = "Mystery flag — can you guess the country?";
     img.onload = () => {
+      if (token !== state.questionToken || !$("screen-game").classList.contains("active")) return;
       loading.classList.add("hidden");
       img.style.visibility = "visible";
       beginAnswering();
     };
-    img.onerror = () => { loading.textContent = "Hmm, this one is shy — skipping!"; setTimeout(nextQuestion, 900); };
+    img.onerror = () => {
+      if (token !== state.questionToken || !$("screen-game").classList.contains("active")) return;
+      loading.textContent = "This flag couldn't load. The answer will be shown.";
+      handleTimeout();
+    };
     img.src = flagUrl(c.code);
   } else {
     img.classList.add("hidden");
@@ -970,17 +1025,55 @@ function loadQuestion() {
   }
   applyMask(level);
 
-  if (state.mode !== "f2f") buildOptions(c, item.kind);
   announce(`Question ${state.index + 1} of ${state.totalQ}. ${item.kind === "flag" ? "A flag" : "A country shape"} is on screen.`);
 }
 
 function beginAnswering() {
+  if (state.answered || !$("screen-game").classList.contains("active")) return;
+  $("optionsGrid").querySelectorAll("button").forEach(b => b.disabled = false);
   if (state.mode === "relaxed") return;
-  if (state.mode === "f2f") startTimer(() => revealF2F());
-  else startTimer(() => handleTimeout());
+  startTimer(() => handleTimeout());
 }
 
 function buildOptions(correct, kind) {
+  if (state.answerStyle === "choice") { buildChoiceOptions(correct, kind); return; }
+  const grid = $("optionsGrid");
+  grid.innerHTML = "";
+  if (state.mode === "f2f") {
+    state.players.forEach((p, i) => {
+      const b = document.createElement("button");
+      b.className = "opt";
+      b.textContent = p.name;
+      b.addEventListener("click", () => {
+        if (state.answered) return;
+        revealF2F();
+        pickWinner(i);
+      });
+      grid.appendChild(b);
+    });
+    const miss = document.createElement("button");
+    miss.className = "opt";
+    miss.textContent = "Missed it";
+    miss.addEventListener("click", () => {
+      if (state.answered) return;
+      revealF2F();
+      pickWinner(-1);
+    });
+    grid.appendChild(miss);
+    return;
+  }
+  [ ["Got it", true], ["Missed it", false] ].forEach(([label, isCorrect]) => {
+    const b = document.createElement("button");
+    b.className = "opt";
+    b.style.justifyContent = "center";
+    b.textContent = label;
+    b.dataset.result = String(isCorrect);
+    b.addEventListener("click", () => answer(b, isCorrect));
+    grid.appendChild(b);
+  });
+}
+
+function buildChoiceOptions(correct, kind) {
   const pool = kind === "outline" ? OUTLINE_POOL : COUNTRIES;
   const sameContinent = shuffle(pool.filter(x => x.continent === correct.continent && x.name !== correct.name)).slice(0, 2);
   const others = shuffle(pool.filter(x => x.name !== correct.name && !sameContinent.includes(x)));
@@ -1008,7 +1101,7 @@ function revealVisual(c, kind) {
 function lockOptions(correctName, chosenBtn, wasCorrect) {
   document.querySelectorAll(".opt").forEach(b => {
     b.disabled = true;
-    if (b.dataset.name === correctName) b.classList.add("correct");
+    if (state.answerStyle === "choice" ? b.dataset.name === correctName : b === chosenBtn && wasCorrect) b.classList.add("correct");
     else if (b === chosenBtn && !wasCorrect) b.classList.add("wrong");
     else b.classList.add("dim");
   });
@@ -1016,21 +1109,26 @@ function lockOptions(correctName, chosenBtn, wasCorrect) {
 
 function answer(btn, isCorrect) {
   if (state.answered) return;
-  state.answered = true;
   stopTimer();
+  if (state.mode === "f2f") {
+    lockOptions(currentItem().c.name, btn, isCorrect);
+    revealF2F();
+    return;
+  }
+  state.answered = true;
   const item = currentItem(), c = item.c;
   revealVisual(c, item.kind);
   const timeUsed = state.mode === "relaxed" ? 0 : state.timerLen - state.timeLeft;
 
   if (isCorrect) {
     let gained = 10;
-    if (state.mode === "timed" || state.mode === "turns")
+    if (state.mode !== "relaxed" && (state.mode === "timed" || isTurnGame()))
       gained += Math.min(5, Math.ceil((state.timeLeft / state.timerLen) * 5));
     state.correctCount++;
     state.streak++;
     state.bestStreak = Math.max(state.bestStreak, state.streak);
     discover(c.code);
-    if (state.mode === "turns") {
+    if (isTurnGame()) {
       const p = currentPlayer();
       p.score += gained; p.correct++; p.time += timeUsed;
       $("hudScore").textContent = p.score;
@@ -1038,14 +1136,14 @@ function answer(btn, isCorrect) {
       state.score += gained;
       $("hudScore").textContent = state.score;
     }
-    $("feedback").textContent = `${pick(PRAISE)} +${gained} points`;
+    $("feedback").textContent = `${pick(PRAISE)} It's ${c.name}. +${gained} points`;
     $("feedback").classList.add("good");
     soundCorrect();
     confetti(state.streak >= 3 ? 40 : 22);
     announce(`Correct! It's ${c.name}. Plus ${gained} points.`);
   } else {
     state.streak = 0;
-    if (state.mode === "turns") currentPlayer().time += timeUsed;
+    if (isTurnGame()) currentPlayer().time += timeUsed;
     $("feedback").textContent = `${pick(CONSOLE)} It's ${c.name}.`;
     $("feedback").classList.add("bad");
     soundWrong();
@@ -1058,11 +1156,13 @@ function answer(btn, isCorrect) {
 
 function handleTimeout() {
   if (state.answered) return;
+  stopTimer();
+  if (state.mode === "f2f") { revealF2F(); return; }
   state.answered = true;
   state.streak = 0;
   const item = currentItem(), c = item.c;
   revealVisual(c, item.kind);
-  if (state.mode === "turns") currentPlayer().time += state.timerLen;
+  if (isTurnGame()) currentPlayer().time += state.timerLen;
   $("feedback").textContent = `⏰ Time's up! It's ${c.name}.`;
   $("feedback").className = "feedback bad";
   soundWrong();
@@ -1075,7 +1175,7 @@ function handleTimeout() {
 function showNextButton() {
   $("nextRow").classList.remove("hidden");
   const last = state.index + 1 >= state.totalQ;
-  const turnEnd = state.mode === "turns" && (state.index + 1) % state.rounds === 0;
+  const turnEnd = isTurnGame() && (state.index + 1) % state.rounds === 0;
   $("nextBtn").textContent = last ? "See results 🏁" : (turnEnd ? "Next player →" : "Next →");
   $("nextBtn").focus();
 }
@@ -1083,7 +1183,10 @@ function showNextButton() {
 /* ----- Shout-out reveal + winner picking ----- */
 function revealF2F() {
   if (state.answered) return;
+  stopTimer();
   state.answered = true;
+  state.winnerPending = true;
+  lockOptions(currentItem().c.name, null, false);
   const item = currentItem(), c = item.c;
   revealVisual(c, item.kind);
   $("f2fCountry").textContent = c.name;
@@ -1099,16 +1202,20 @@ function revealF2F() {
   });
   const none = document.createElement("button");
   none.className = "btn btn-ghost";
-  none.textContent = "No one got it 😅";
+  none.textContent = "No one got it";
   none.addEventListener("click", () => pickWinner(-1));
   grid.appendChild(none);
   $("f2fReveal").classList.remove("hidden");
   $("f2fReveal").scrollIntoView({ behavior: "smooth", block: "nearest" });
-  announce(`Time's up! The answer is ${c.name}. Choose who won this question.`);
+  announce(`The answer is ${c.name}. Choose who won this question.`);
 }
 function pickWinner(playerIndex) {
+  if (!state.winnerPending) return;
+  state.winnerPending = false;
+  $("winnerGrid").querySelectorAll("button").forEach(b => b.disabled = true);
   if (playerIndex >= 0) {
     state.players[playerIndex].score++;
+    discover(currentItem().c.code);
     soundCorrect();
     confetti(18);
     $("feedback").textContent = `+1 point for ${state.players[playerIndex].name}! 🎉`;
@@ -1121,13 +1228,18 @@ function pickWinner(playerIndex) {
   const board = state.players.map(p => `${p.name}: ${p.score}`).join("  ·  ");
   $("feedback").textContent += `  |  ${board}`;
   $("f2fReveal").classList.add("hidden");
-  setTimeout(nextQuestion, 1400);
+  $("feedback").textContent = `It's ${currentItem().c.name}. ` + $("feedback").textContent;
+  renderLiveScores();
+  showNextButton();
 }
 
 function nextQuestion() {
+  if (!state.answered || state.winnerPending || $("nextRow").classList.contains("hidden")) return;
+  $("nextRow").classList.add("hidden");
+  stopTimer();
   state.index++;
   if (state.index >= state.totalQ) { endGame(); return; }
-  if (state.mode === "turns" && state.index % state.rounds === 0) {
+  if (isTurnGame() && state.index % state.rounds === 0) {
     state.streak = 0;
     showPassScreen();
     return;
@@ -1143,7 +1255,7 @@ $("quitBtn").addEventListener("click", () => { stopTimer(); showScreen("home"); 
 function endGame() {
   stopTimer();
   showScreen("end");
-  const party = state.mode === "f2f" || state.mode === "turns";
+  const party = state.mode === "f2f" || isTurnGame();
   $("soloResults").classList.toggle("hidden", party);
   $("partyResults").classList.toggle("hidden", !party);
   $("changePlayersBtn").classList.toggle("hidden", !party);
@@ -1178,10 +1290,19 @@ function endGame() {
     const fastest = scorers.length ? Math.min(...scorers.map(r => r.avg)) : -1;
     renderBoard(rows,
       p => `${p.score} pts`,
-      p => `${p.correct}/${state.rounds} correct · avg ${p.avg.toFixed(1)}s` + (p.correct > 0 && p.avg === fastest ? "  ⚡ Fastest!" : ""));
+      p => state.mode === "relaxed" ? `${p.correct}/${state.rounds} correct` : `${p.correct}/${state.rounds} correct · avg ${p.avg.toFixed(1)}s` + (p.correct > 0 && p.avg === fastest ? "  ⚡ Fastest!" : ""));
   }
 }
 
+function renderLiveScores() {
+  const board = $("partyLiveScores");
+  board.classList.toggle("hidden", state.mode !== "f2f");
+  board.textContent = state.mode === "f2f"
+    ? state.players.map(p => `${p.name}: ${p.score}`).join("  ·  ") : "";
+}
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
 function renderBoard(rows, ptsFn, subFn) {
   const top = Math.max(...rows.map(p => p.score));
   rows.sort((a, b) => b.score - a.score || ((a.avg ?? 0) - (b.avg ?? 0)));
@@ -1189,22 +1310,22 @@ function renderBoard(rows, ptsFn, subFn) {
   const board = $("partyResults");
   board.innerHTML = "";
   rows.forEach((p, i) => {
-    const isWinner = p.score === top && top > 0;
+    const isWinner = p.score === top && top > 0 && (rows[0].avg === undefined || p.avg === rows[0].avg);
     const row = document.createElement("div");
     row.className = "score-row" + (isWinner ? " winner" : "");
     row.innerHTML = `<span class="medal" aria-hidden="true">${isWinner ? "👑" : (medals[i] || "🎖️")}</span>
-      <span class="name">${p.name}${isWinner ? " — Winner!" : ""}</span>
+      <span class="name">${escapeHTML(p.name)}${isWinner ? " — Winner!" : ""}</span>
       <span class="pts">${ptsFn(p)}</span>` +
       (subFn ? `<span class="sub">${subFn(p)}</span>` : "");
     board.appendChild(row);
   });
   if (top > 0) confetti(50);
-  const winners = rows.filter(p => p.score === top && top > 0).map(p => p.name);
+  const winners = rows.filter(p => p.score === top && top > 0 && (rows[0].avg === undefined || p.avg === rows[0].avg)).map(p => p.name);
   announce(winners.length ? `Game over. Winner: ${winners.join(" and ")}.` : "Game over.");
 }
 
 $("againBtn").addEventListener("click", startGame);
-$("changePlayersBtn").addEventListener("click", () => showScreen("party-setup"));
+$("changePlayersBtn").addEventListener("click", () => showScreen((state.mode === "timed" || state.mode === "relaxed") ? "setup" : "party-setup"));
 
 /* ============================================================
    SETUP SCREENS
@@ -1224,6 +1345,8 @@ document.querySelectorAll(".mode-btn[data-mode]").forEach(btn => {
     } else {
       $("setupModeLabel").textContent = state.mode === "timed" ? "Beat the Clock ⏱️" : "Take Your Time 🐢";
       $("timerField").classList.toggle("hidden", state.mode !== "timed");
+      $("timedPlayersField").classList.remove("hidden");
+      renderTimedPlayers();
       showScreen("setup");
     }
   });
@@ -1234,12 +1357,47 @@ document.querySelectorAll("[data-goto]").forEach(b =>
   b.addEventListener("click", () => { stopTimer(); showScreen(b.dataset.goto); }));
 $("brandHome").addEventListener("click", () => { stopTimer(); showScreen("home"); });
 
+let timedPlayerCount = 1;
+function renderTimedPlayers() {
+  $("timedPlayerCount").textContent = timedPlayerCount;
+  $("timedPlayerMinus").disabled = timedPlayerCount <= 1;
+  $("timedPlayerPlus").disabled = timedPlayerCount >= 8;
+  const list = $("timedPlayerList");
+  const existing = [...list.querySelectorAll("input")].map(i => i.value);
+  list.innerHTML = "";
+  for (let i = 0; i < timedPlayerCount; i++) {
+    const row = document.createElement("div");
+    row.className = "player-row";
+    const label = document.createElement("span");
+    label.className = "pnum";
+    label.textContent = i + 1;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 14;
+    input.placeholder = `Player ${i + 1}`;
+    input.setAttribute("aria-label", `Player ${i + 1} name`);
+    input.value = existing[i] || "";
+    row.append(label, input);
+    list.appendChild(row);
+  }
+}
+$("timedPlayerPlus").addEventListener("click", () => {
+  if (timedPlayerCount < 8) { timedPlayerCount++; renderTimedPlayers(); soundTap(); }
+});
+$("timedPlayerMinus").addEventListener("click", () => {
+  if (timedPlayerCount > 1) { timedPlayerCount--; renderTimedPlayers(); soundTap(); }
+});
 // Solo setup
+wireChips("answerStyleChips", "style", () => soundTap());
 wireChips("contentChips", "content", () => soundTap());
 wireChips("levelChips", "level", () => soundTap());
 wireChips("roundChips", "rounds", () => soundTap());
 wireChips("timerChips", "timer", () => soundTap());
 $("startSoloBtn").addEventListener("click", () => {
+  state.players = (state.mode === "timed" || state.mode === "relaxed")
+    ? [...$("timedPlayerList").querySelectorAll("input")].map((inp, i) => ({ name: inp.value.trim() || `Player ${i + 1}`, score: 0, correct: 0, time: 0 }))
+    : [];
+  state.answerStyle = chipValue("answerStyleChips", "style");
   state.content = chipValue("contentChips", "content");
   state.level = chipValue("levelChips", "level");
   state.rounds = +chipValue("roundChips", "rounds");
@@ -1248,10 +1406,12 @@ $("startSoloBtn").addEventListener("click", () => {
 });
 
 // Party setup (shared by f2f + turns)
-let partyPlayerCount = 2;
+let partyPlayerCount = 1;
 const MAX_PLAYERS = 8;
 function renderPlayerInputs() {
   $("playerCount").textContent = partyPlayerCount;
+  $("playerMinus").disabled = partyPlayerCount <= 1;
+  $("playerPlus").disabled = partyPlayerCount >= MAX_PLAYERS;
   const list = $("playerList");
   const existing = [...list.querySelectorAll("input")].map(i => i.value);
   list.innerHTML = "";
@@ -1273,13 +1433,15 @@ $("playerPlus").addEventListener("click", () => {
   if (partyPlayerCount < MAX_PLAYERS) { partyPlayerCount++; renderPlayerInputs(); soundTap(); }
 });
 $("playerMinus").addEventListener("click", () => {
-  if (partyPlayerCount > 2) { partyPlayerCount--; renderPlayerInputs(); soundTap(); }
+  if (partyPlayerCount > 1) { partyPlayerCount--; renderPlayerInputs(); soundTap(); }
 });
+wireChips("answerStyleChipsP", "style", () => soundTap());
 wireChips("contentChipsP", "content", () => soundTap());
 wireChips("levelChipsP", "level", () => soundTap());
 wireChips("roundChipsP", "rounds", () => soundTap());
 wireChips("timerChipsP", "timer", () => soundTap());
 $("startPartyBtn").addEventListener("click", () => {
+  state.answerStyle = chipValue("answerStyleChipsP", "style");
   state.content = chipValue("contentChipsP", "content");
   state.level = chipValue("levelChipsP", "level");
   state.rounds = +chipValue("roundChipsP", "rounds");
@@ -1367,10 +1529,14 @@ $("resetProgressBtn").addEventListener("click", () => {
   }
 });
 
-/* Keyboard shortcuts: A–D or 1–4 in multiple-choice modes */
+/* Keyboard shortcuts follow the selected answer style. */
 document.addEventListener("keydown", e => {
-  if (!$("screen-game").classList.contains("active") || state.mode === "f2f" || state.answered) return;
-  const map = { a: 0, b: 1, c: 2, d: 3, "1": 0, "2": 1, "3": 2, "4": 3 };
+  if (!$("screen-game").classList.contains("active") || state.answered) return;
+  if (state.mode === "f2f" && state.answerStyle === "self") return;
+  if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+  const map = state.answerStyle === "self"
+    ? { g: 0, m: 1, "1": 0, "2": 1 }
+    : { a: 0, b: 1, c: 2, d: 3, "1": 0, "2": 1, "3": 2, "4": 3 };
   const idx = map[e.key.toLowerCase()];
   if (idx !== undefined) {
     const btns = document.querySelectorAll(".opt");
